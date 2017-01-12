@@ -1,0 +1,161 @@
+---
+title: "Exosome Microarray Analysis"
+author: "Claire Levy"
+date: "January 11, 2017"
+output: github_document
+---
+
+```{r setup, include=FALSE, cache = TRUE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+
+library(plyr)
+require(dplyr)
+require(lumi)
+require(limma)
+library(pander)
+library(stringr)
+library(ggplot2)
+
+
+RAW<- "..\\raw_data\\FinalReport.txt"
+
+
+RAW.lumi<-lumiR(RAW, detectionTh = 0.05, na.rm = TRUE,convertNuID = FALSE, dec = '.',
+parseColumnName = FALSE, checkDupId = FALSE,
+QC = TRUE,
+columnNameGrepPattern = list(exprs='AVG_SIGNAL',
+  se.exprs='BEAD_STDERR',
+  detection='Detection Pval',
+  beadNum='Avg_NBEADS'),
+inputAnnotation=TRUE,
+annotationColumn=c('ILMN_GENE', 'ENTREZ_GENE_ID', 'GI', 'ACCESSION', 'SYMBOL', 'PROBE_ID', 'PROBE_START', 'PROBE_SEQUENCE', 'CHROMOSOME', 'PROBE_CHR_ORIENTATION', 'PROBE_COORDINATES'),
+verbose = TRUE)
+
+
+##trying the faster method...
+
+RAW<-lumiR.(fileName = "..\\raw_data\\FinalReport.txt" )
+
+
+
+
+
+
+
+```
+
+```{r read in pData metadata make adf}
+
+#read in pData
+pData<- read.csv("..\\raw_data\\SampleInformation.csv",header=TRUE)
+
+#The first column should be called "SampleNames"
+names(pData)[1]<-"SampleNames"
+
+#Make rownames of pData same as the contents of the SampleNames column
+row.names(pData)<-pData$SampleNames
+
+
+#create metadata df
+metadata<- data.frame(labelDescription = c("Sample name on Array","LC = Langerhans cells, HVE = Human vaginal epithelial cells","Cell Donor ID","HIV, Sendai or none","What was added to the sample"))
+                      
+row.names(metadata)<-colnames(pData)
+
+
+#create experiment data
+experimentData<-new("MIAME",name="Claire Levy",
+                    lab="Lucia Vojtech",title="Exosome Microarray")
+
+#combine metadata and pdata into an annotated df
+adf<-new("AnnotatedDataFrame",data = pData,varMetadata = metadata)
+
+```
+
+
+
+
+```{r, make complete lumibatch}
+
+#make a lumiBatch that contains both the raw data we got from
+#shared resources AND the phenoData, metadata and experiment data
+
+complete.RAW.lumi<-new("LumiBatch",
+                  assayData = assayData(RAW.lumi),
+                  phenoData = adf,
+                  experimentData = experimentData,
+                  detection = detection(RAW.lumi),
+                  featureData = featureData(RAW.lumi))
+```
+
+
+```{r plots of nonnorm data,cache = TRUE}
+
+#density plot
+density(complete.RAW.lumi)#number of probes for each sample that occur
+#at a certain log2 intensity
+
+#sample relations
+plot(complete.RAW.lumi, what='sampleRelation',method="mds")
+
+#boxplot
+boxplot(complete.RAW.lumi)
+
+```
+
+
+```{r background correction, results = 'hide'}
+
+#the data we got from the core had no background correction so I will do it here
+B.complete.RAW.lumi<-lumiB(complete.RAW.lumi, method = "bgAdjust")
+#This doesn't work because I don't have control probe data. I don't think I had control probe data for the explant MA but didn't get an error that time. Maybe the MA was done differently by core services this time?
+
+# VST TRANSFORMATION 
+#"Stabilizing the expression variance based on
+#the bead level expression variance and mean relations"
+
+TB.complete.RAW.lumi <-lumiT (B.complete.RAW.lumi)
+
+# ROBUST SPLINE NORMALIZATION 
+
+NTB.complete.RAW.lumi<-lumiN(TB.complete.RAW.lumi,method="rsn")
+
+#QUALITY CONTROL 
+
+QNTB.complete.RAW.lumi <- lumiQ(NTB.complete.RAW.lumi,detectionTh=0.05)
+```
+```{r plots of normalized data}
+#density plot
+density(QNTB.complete.RAW.lumi)#number of probes for each sample that occur
+#at a certain log2 intensity
+
+
+#sample relations
+plot(QNTB.complete.RAW.lumi, what='sampleRelation',method="mds")
+
+#boxplot
+boxplot(QNTB.complete.RAW.lumi)
+
+```
+
+```{r MDS plot}
+#to get data into dataframe form for nice plotting...
+
+dimensional_data <- plotMDS(QNTB.complete.RAW.lumi)#make the plot, it invisible returns a large object that has the actual dimensions data in matrices called x and y (one for each dimension)
+
+#make a data frame where
+d <- data.frame(Dim1 = dimensional_data$x, #Dim1 is a column containing the values from the x matrix
+               Dim2 = dimensional_data$y, #Dim2 is a column containing the values from the y matrix
+               SampleNames = names(dimensional_data$x))#SampleNames is a column that holds the column names from the x matrix, which happen to be the microarray wells.
+
+#want to add other info from the pData to the plot, it into d by SampleNames, which is already a column in pData and I also have in d (See above)
+pData$SampleNames <- rownames(pData)
+d <- as_data_frame(merge(d, pData), by = "SampleNames")
+
+
+
+ggplot(d, aes(x=Dim1, y = Dim2))+
+  geom_point(aes(color = CellType, shape = Virus))
+
+
+```
