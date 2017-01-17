@@ -29,22 +29,48 @@ library(limma)
 library(pander)
 library(stringr)
 library(ggplot2)
+library(reshape2)
 
 ```
 
 ```{r load lumibatch data and subset}
 
 #note that the sampleNames are NOT syntactically valid, here (they have "-")
-lumibatch<-lumiR.batch(fileList = "..\\raw_data\\FinalReport.txt",
-            detectionTh = 0.05, sampleInfoFile = "..\\raw_data\\SampleInformation.txt")
+lumibatch<-lumiR(fileName = "..\\raw_data\\FinalReport.txt",
+            detectionTh = 0.05,
+            annotationColumn=c('ENTREZ_GENE_ID','ACCESSION', 'SYMBOL', 'PROBE_SEQUENCE', 'PROBE_START', 'CHROMOSOME', 'PROBE_CHR_ORIENTATION', 'PROBE_COORDINATES', 'DEFINITION'))
+
+#read in pData
+pData <- read.table("..\\raw_data\\SampleInformation.txt", header = TRUE)
+
+#make names valid in pData
+corrected_pData <- pData %>%
+  mutate(ArrayName = str_replace(ArrayName,"-","_"))%>%
+  mutate(Donor = str_replace(Donor, "-","_"))
+
+#make the rownames of pData the sample as the ArrayName
+row.names(corrected_pData)<-corrected_pData$ArrayName
 
 
+#make names valid in lumibatch
+sampleNames(lumibatch)<- unique(corrected_pData$ArrayName)
+
+#put pData into an adf
+adf<-AnnotatedDataFrame(data=corrected_pData)
+
+
+valid_lumibatch<-new("LumiBatch",
+                     assayData = assayData(lumibatch),
+                     phenoData = adf,
+                     detection = detection(lumibatch),
+                     controlData = controlData(lumibatch),
+                     featureData = featureData(lumibatch))
 
 #subset lumibatch for just the HVE cells
-HVE_lumibatch<-lumibatch[,lumibatch$CellType == "HVE"]
+HVE_lumibatch<-valid_lumibatch[,valid_lumibatch$CellType == "HVE"]
 ```
 
-Plot of non-normalized data: HVE_A2 appears as the main outlier, it is donor A with no virus and low exosomes.
+Plots of non-normalized data: HVE_A2 appears as the main outlier, it is donor A with no virus and low exosomes.
 ```{r density plot of nonnorm data}
 density(HVE_lumibatch)#number of probes for each sample that occur
 #at a certain log2 intensity
@@ -58,18 +84,16 @@ dimensional_data <- plotMDS(HVE_lumibatch)#make the plot, it invisibly returns a
 #make a data frame where
 d <- data.frame(Dim1 = dimensional_data$x, #Dim1 is a column containing the values from the x matrix
                Dim2 = dimensional_data$y, #Dim2 is a column containing the values from the y matrix
-               sampleID = names(dimensional_data$x))#SampleID is a column that holds the column names from the x matrix, which happen to be the microarray wells.
+               ArrayName = names(dimensional_data$x))#SampleID is a column that holds the column names from the x matrix, which happen to be the microarray wells.
 
-d <- as_data_frame(merge(d, pData(HVE_lumibatch)), by = "sampleID")
+d <- as_data_frame(merge(d, pData(HVE_lumibatch)), by = "ArrayName")
 ```
 
-MDS plot of non-normalized data
 
 ```{r plot nonnorm dims}
 
 ggplot(d, aes(x=Dim1, y = Dim2))+
-  geom_point(aes(color = Treatment, shape = Donor), size = 3)
-
+  geom_point(aes(shape = Donor, color = Treatment), size = 3)
 ```
 
 ```{r boxplot}
@@ -90,10 +114,10 @@ B_HVE_lumibatch<-lumiB(HVE_lumibatch, method = "bgAdjust")
 
 TB_HVE_lumibatch <-lumiT (B_HVE_lumibatch, method = 'vst')
 #can do this to look at a plot. plotting doesn't work if I do method = "log2"
-plotVST(TB_HVE_lumibatch)
+# plotVST(TB_HVE_lumibatch)
 ```
 
-This looks good, right?
+Plots of quantile normalized data
 
 ```{r quantile normalization and plots}
 
@@ -104,27 +128,47 @@ NTB_HVE_lumibatch<-lumiN(TB_HVE_lumibatch,method="quantile")
 density(NTB_HVE_lumibatch)
 ```
 
+```{r normalized MDS}
+
+norm_dimensional_data <- plotMDS(NTB_HVE_lumibatch)#make the plot, it invisibly returns a large object that has the actual dimensions data in matrices called x and y (one for each dimension)
+
+#make a data frame where
+normd <- data.frame(Dim1 = norm_dimensional_data$x, #Dim1 is a column containing the values from the x matrix
+               Dim2 = norm_dimensional_data$y, #Dim2 is a column containing the values from the y matrix
+               ArrayName = names(norm_dimensional_data$x))#SampleID is a column that holds the column names from the x matrix, which happen to be the microarray wells.
+
+normd <- as_data_frame(merge(normd, pData(NTB_HVE_lumibatch)), by = "ArrayName")
+
+
+#HVE_B media is hidden under low exosomes
+ggplot(normd, aes(x=Dim1, y = Dim2))+
+  geom_point(aes(shape = Donor, color = Treatment), size = 3)
+
+```
+
+
+
+
 ```{r quantile norm boxplot}
 
 boxplot(NTB_HVE_lumibatch)
 ```
 
 
-This density plot looks 
+
 ```{r RSN normalization and plot}
 
-#trying quantile normalization here (not robust spline as before)
-NrsnTB_HVE_lumibatch<-lumiN(TB_HVE_lumibatch,method="rsn")
-
-density(NrsnTB_HVE_lumibatch)
+# NrsnTB_HVE_lumibatch<-lumiN(TB_HVE_lumibatch,method="rsn")
+# #This density plot looks fine too I think.
+# density(NrsnTB_HVE_lumibatch)
 ```
 
 
 ```{r rns boxplot}
-boxplot(NrsnTB_HVE_lumibatch)
+# boxplot(NrsnTB_HVE_lumibatch)
 ```
 
-```{r QC of normalized data}
+```{r QC of normalized data, results = "hide"}
 
 #I'm going to use the quantile normalized data for now.
 
@@ -135,6 +179,7 @@ QNTB_HVE_lumibatch<-lumiQ(NTB_HVE_lumibatch)
 FILTERING PROBES Limma suggests to keep probes that are expressed above background on at least n arrays where n is smallest number of replicates assigned to any of the treatment combinations.
 
 We have 3 donors x 4 Treatments so I will keep probes with detection levels above background in at least 3 samples.
+
 ```{r nonspecific filtering}
 #this is how the detection filtering works:
 #Mark the detection pvalues (there is one per probe per sample) with a 1 if <0.05 or a 0 if >0.05
@@ -163,13 +208,13 @@ dims(QNTB_HVE_lumibatch)
 ```
 
 Numbers of probes in data set after filtering:
-```{r before filtering}
+```{r after filtering}
 dims(HVE_expressedProbes_lumibatch)
 ```
 
 ```{r targets and design}
 
-targets <-pData(lumibatch)%>%
+targets <-pData(valid_lumibatch)%>%
   filter(CellType == "HVE")%>%
   select(Donor, Treatment)
 
@@ -193,6 +238,98 @@ HVE_contrasts <-makeContrasts(
   MediaVsSup = TreatmentSeminalSupernatant - TreatmentMedia,
   LowExosVsHighExos = (TreatmentHighExosomes - TreatmentMedia)- (TreatmentLowExosomes - TreatmentMedia), levels = HVE_design)
 
+HVE_fit2 <-contrasts.fit (HVE_contrasts, fit = HVE_fit)
 
 
+HVE_fit2 <-eBayes(HVE_fit2)
+
+```
+
+
+How many DE probes  were in each contrast?
+```{r, how many probes are up and down regulated}
+
+#method=separate is same as doing topTable for all coefs separately
+
+results <- decideTests(HVE_fit2,method="separate", adjust.method="BH",
+                      p.value=0.05, lfc=0.5)
+
+#turn the results matrix into a data frame and make the
+#probeID a real column and remove the rownames
+
+resultsDF<-as.data.frame(results)
+resultsDF$ProbeID<-rownames(resultsDF)
+rownames(resultsDF)<-NULL
+
+#melt the df for easy summarizing
+
+
+resultsDFmelt<-melt(resultsDF, id.vars="ProbeID")
+
+summary<-resultsDFmelt %>%
+  group_by(variable)%>%
+ summarize(down=sum(value=="-1"),up=sum(value=="1"))
+
+pander(summary)
+```
+
+
+```{r toptable for MediaVsSup contrast}
+
+ttMediaVsSup<- topTable(HVE_fit2, coef = "MediaVsSup", adjust.method = "BH", number=Inf, p.value=0.05, lfc=0.5)
+```
+
+## CAMERA testing
+
+Test 1 uses the MediaVsSup contrast
+
+```{r CAMERA setup test1}
+#I'm going to do a CAMERA test using the MSigDB hallmark sets
+
+load("geneSets_for_CAMERA/human_Hallmark_v5.rdata")
+
+#expression set to use
+
+##Expression set to use
+
+eSet<-exprs(HVE_expressedProbes_lumibatch)
+
+
+#IDs from eset: ProbeIDS from the data I'm analyzing (not the pre-determined gene set). There are some duplicates in there but I am leaving them in for now because I know they will be removed non-randomly. This means less power though I think.
+
+identifiers = as.character(fData(HVE_expressedProbes_lumibatch)[,"ENTREZ_GENE_ID"])
+
+index<-ids2indices(gene.sets = Hs.H, identifiers = identifiers)
+```
+
+```{r CAMERA test1}
+#define a matrix of the contrast that you want the results for
+contrMediaVsSup<-makeContrasts(TreatmentSeminalSupernatant - TreatmentMedia, levels = HVE_design)
+
+#put arguments into camera
+hallmarkMediaVsSup<-camera(y = eSet, index = index, design = HVE_design, contrast = contrMediaVsSup )
+
+pander(head(hallmarkMediaVsSup))
+```
+
+Test 2 uses the MediaVsHighExos contrast
+
+```{r CAMERA test2}
+contrMediaVsHighExos<-makeContrasts(TreatmentHighExosomes - TreatmentMedia, levels = HVE_design)
+
+#put arguments into camera
+hallmarkMediaVsHighExos<-camera(y = eSet, index = index, design = HVE_design, contrast = contrMediaVsHighExos )
+
+pander(head(hallmarkMediaVsHighExos))
+```
+
+Test 3 uses the MediaVsLowExos contrast
+
+```{r CAMERA test2}
+contrMediaVsLowExos<-makeContrasts(TreatmentLowExosomes - TreatmentMedia, levels = HVE_design)
+
+#put arguments into camera
+hallmarkMediaVsLowExos<-camera(y = eSet, index = index, design = HVE_design, contrast = contrMediaVsLowExos )
+
+pander(head(hallmarkMediaVsLowExos))
 ```
