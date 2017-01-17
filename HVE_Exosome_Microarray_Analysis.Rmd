@@ -1,0 +1,198 @@
+---
+title: "Exosome Microarray Analysis: HVE cells only"
+author: "Claire Levy"
+date: "January 13, 2017"
+output: github_document
+---
+
+
+
+## Experiment overview
+
+Experiments were done on two cells types: Langerhans cells and vaginal epithelial cells.
+
+HVE cells were exposed to the following:
+
+* High concentration of exosomes ("HighExosomes")
+* Low concentration of exosomes ("LowExosomes")
+* Seminal supernatant
+* Media control
+
+## The following analysis is only for HVE cells
+
+```{r setup, include=FALSE, cache = TRUE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+library(dplyr)
+library(lumi)
+library(limma)
+library(pander)
+library(stringr)
+library(ggplot2)
+
+```
+
+```{r load lumibatch data and subset}
+
+#note that the sampleNames are NOT syntactically valid, here (they have "-")
+lumibatch<-lumiR.batch(fileList = "..\\raw_data\\FinalReport.txt",
+            detectionTh = 0.05, sampleInfoFile = "..\\raw_data\\SampleInformation.txt")
+
+
+
+#subset lumibatch for just the HVE cells
+HVE_lumibatch<-lumibatch[,lumibatch$CellType == "HVE"]
+```
+
+Plot of non-normalized data: HVE_A2 appears as the main outlier, it is donor A with no virus and low exosomes.
+```{r density plot of nonnorm data}
+density(HVE_lumibatch)#number of probes for each sample that occur
+#at a certain log2 intensity
+```
+
+
+```{r sample relations plot}
+
+dimensional_data <- plotMDS(HVE_lumibatch)#make the plot, it invisibly returns a large object that has the actual dimensions data in matrices called x and y (one for each dimension)
+
+#make a data frame where
+d <- data.frame(Dim1 = dimensional_data$x, #Dim1 is a column containing the values from the x matrix
+               Dim2 = dimensional_data$y, #Dim2 is a column containing the values from the y matrix
+               sampleID = names(dimensional_data$x))#SampleID is a column that holds the column names from the x matrix, which happen to be the microarray wells.
+
+d <- as_data_frame(merge(d, pData(HVE_lumibatch)), by = "sampleID")
+```
+
+MDS plot of non-normalized data
+
+```{r plot nonnorm dims}
+
+ggplot(d, aes(x=Dim1, y = Dim2))+
+  geom_point(aes(color = Treatment, shape = Donor), size = 3)
+
+```
+
+```{r boxplot}
+#boxplot
+boxplot(HVE_lumibatch)
+```
+
+
+```{r background correction, results = 'hide'}
+
+#the data we got from the core had no background correction (I don't think it did anyway...) so I will do it here.
+B_HVE_lumibatch<-lumiB(HVE_lumibatch, method = "bgAdjust")
+
+
+# VST TRANSFORMATION 
+#"Stabilizing the expression variance based on
+#the bead level expression variance and mean relations"
+
+TB_HVE_lumibatch <-lumiT (B_HVE_lumibatch, method = 'vst')
+#can do this to look at a plot. plotting doesn't work if I do method = "log2"
+plotVST(TB_HVE_lumibatch)
+```
+
+This looks good, right?
+
+```{r quantile normalization and plots}
+
+#trying quantile normalization here (not robust spline as before)
+NTB_HVE_lumibatch<-lumiN(TB_HVE_lumibatch,method="quantile")
+
+#this seems to be fine with quantile normalization...
+density(NTB_HVE_lumibatch)
+```
+
+```{r quantile norm boxplot}
+
+boxplot(NTB_HVE_lumibatch)
+```
+
+
+This density plot looks 
+```{r RSN normalization and plot}
+
+#trying quantile normalization here (not robust spline as before)
+NrsnTB_HVE_lumibatch<-lumiN(TB_HVE_lumibatch,method="rsn")
+
+density(NrsnTB_HVE_lumibatch)
+```
+
+
+```{r rns boxplot}
+boxplot(NrsnTB_HVE_lumibatch)
+```
+
+```{r QC of normalized data}
+
+#I'm going to use the quantile normalized data for now.
+
+QNTB_HVE_lumibatch<-lumiQ(NTB_HVE_lumibatch)
+
+```
+
+FILTERING PROBES Limma suggests to keep probes that are expressed above background on at least n arrays where n is smallest number of replicates assigned to any of the treatment combinations.
+
+We have 3 donors x 4 Treatments so I will keep probes with detection levels above background in at least 3 samples.
+```{r nonspecific filtering}
+#this is how the detection filtering works:
+#Mark the detection pvalues (there is one per probe per sample) with a 1 if <0.05 or a 0 if >0.05
+# using (detection(QNTB.complete.RAW.lumi)<0.05)
+
+#add up the 0's and 1's across each row (i.e. for all the samples)
+#using rowSums
+
+#now you have the number of detection p values <0.05 for each probe
+#for all the samples (max possible = total samples)
+
+#now tell me which probes have a rowSum of >=3 (probes will be marked as TRUE
+# or false if they do or do not have >=3 rowSum)
+
+HVE_detectedProbes <- rowSums(detection(QNTB_HVE_lumibatch)<0.05)>= 3
+
+#now extract just those probes that are TRUE from the lumibatch
+
+HVE_expressedProbes_lumibatch <-QNTB_HVE_lumibatch[HVE_detectedProbes,]
+```
+
+Number of probes in data set before filtering:
+
+```{r before filtering}
+dims(QNTB_HVE_lumibatch)
+```
+
+Numbers of probes in data set after filtering:
+```{r before filtering}
+dims(HVE_expressedProbes_lumibatch)
+```
+
+```{r targets and design}
+
+targets <-pData(lumibatch)%>%
+  filter(CellType == "HVE")%>%
+  select(Donor, Treatment)
+
+Donor <-factor(targets$Donor)
+
+Treatment <-factor(targets$Treatment, levels = c("Media","LowExosomes","HighExosomes","SeminalSupernatant"))
+
+                   
+#When I have ~0 for the intercept, each coeff represents the avg of the samples at each level of Treatment and Donor. If I had used ~1 instead, the intercept would represent the avg of the samples for Media and the next coeff would represent the increase in the average of LowExosomes OVER Media.
+
+HVE_design <-model.matrix(~0+Treatment+Donor)
+```
+
+```{r fit and fit contrasts and eBayes}
+
+HVE_fit <- lmFit(HVE_expressedProbes_lumibatch, design = HVE_design)
+
+HVE_contrasts <-makeContrasts(
+  MediaVsLowExos = TreatmentLowExosomes - TreatmentMedia,
+  MediaVsHighExos = TreatmentHighExosomes - TreatmentMedia,
+  MediaVsSup = TreatmentSeminalSupernatant - TreatmentMedia,
+  LowExosVsHighExos = (TreatmentHighExosomes - TreatmentMedia)- (TreatmentLowExosomes - TreatmentMedia), levels = HVE_design)
+
+
+
+```
