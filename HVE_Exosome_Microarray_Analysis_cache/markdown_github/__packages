@@ -1,0 +1,10 @@
+base
+dplyr
+BiocGenerics
+Biobase
+lumi
+limma
+pander
+stringr
+ggplot2
+reshape2

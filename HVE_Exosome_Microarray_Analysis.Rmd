@@ -20,7 +20,7 @@ HVE cells were exposed to the following:
 
 ## The following analysis is only for HVE cells
 
-```{r setup, include=FALSE, cache = TRUE}
+```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
 
 library(dplyr)
@@ -33,7 +33,7 @@ library(reshape2)
 
 ```
 
-```{r load lumibatch data and subset}
+```{r load lumibatch data and subset , cache = TRUE}
 
 #note that the sampleNames are NOT syntactically valid, here (they have "-")
 lumibatch<-lumiR(fileName = "..\\raw_data\\FinalReport.txt",
@@ -70,7 +70,7 @@ valid_lumibatch<-new("LumiBatch",
 HVE_lumibatch<-valid_lumibatch[,valid_lumibatch$CellType == "HVE"]
 ```
 
-Plots of non-normalized data: HVE_A2 appears as the main outlier, it is donor A with no virus and low exosomes.
+Plots of non-normalized data: HVE_A2 appears as the main outlier, it is donor A with low exosomes.
 ```{r density plot of nonnorm data}
 density(HVE_lumibatch)#number of probes for each sample that occur
 #at a certain log2 intensity
@@ -176,7 +176,9 @@ QNTB_HVE_lumibatch<-lumiQ(NTB_HVE_lumibatch)
 
 ```
 
-FILTERING PROBES Limma suggests to keep probes that are expressed above background on at least n arrays where n is smallest number of replicates assigned to any of the treatment combinations.
+# Non-specific filtering
+
+Limma suggests to keep probes that are expressed above background on at least n arrays where n is smallest number of replicates assigned to any of the treatment combinations.
 
 We have 3 donors x 4 Treatments so I will keep probes with detection levels above background in at least 3 samples.
 
@@ -281,55 +283,124 @@ ttMediaVsSup<- topTable(HVE_fit2, coef = "MediaVsSup", adjust.method = "BH", num
 
 ## CAMERA testing
 
-Test 1 uses the MediaVsSup contrast
+#Hallmark gene sets: top 6 results
 
-```{r CAMERA setup test1}
-#I'm going to do a CAMERA test using the MSigDB hallmark sets
-
-load("geneSets_for_CAMERA/human_Hallmark_v5.rdata")
-
-#expression set to use
+```{r CAMERA setup}
 
 ##Expression set to use
 
 eSet<-exprs(HVE_expressedProbes_lumibatch)
 
-
 #IDs from eset: ProbeIDS from the data I'm analyzing (not the pre-determined gene set). There are some duplicates in there but I am leaving them in for now because I know they will be removed non-randomly. This means less power though I think.
 
 identifiers = as.character(fData(HVE_expressedProbes_lumibatch)[,"ENTREZ_GENE_ID"])
-
-index<-ids2indices(gene.sets = Hs.H, identifiers = identifiers)
 ```
 
-```{r CAMERA test1}
-#define a matrix of the contrast that you want the results for
-contrMediaVsSup<-makeContrasts(TreatmentSeminalSupernatant - TreatmentMedia, levels = HVE_design)
+```{r camera function}
+#a function to to a camera test looping over a list of contrasts
+#I have already defined the identifiers, design, index and y above
 
-#put arguments into camera
-hallmarkMediaVsSup<-camera(y = eSet, index = index, design = HVE_design, contrast = contrMediaVsSup )
+contrNames<- list("MediaVsLowExos","MediaVsHighExos","MediaVsSup","LowExosVsHighExos")
 
-pander(head(hallmarkMediaVsSup))
+#the function arguments allow you to use different contrasts and a different index
+cameraTest <- function (contrName, index){
+camera(y = eSet, index = index, design = HVE_design, 
+            contrast = HVE_contrasts[,contrName])#subset the HVE_contrasts matrix and get one contrast at a time.
+}
 ```
 
-Test 2 uses the MediaVsHighExos contrast
 
-```{r CAMERA test2}
-contrMediaVsHighExos<-makeContrasts(TreatmentHighExosomes - TreatmentMedia, levels = HVE_design)
+```{r Hallmark CAMERA test}
+#I'm going to do a CAMERA test using the MSigDB hallmark sets on all of my contrasts
+#downloaded Rdata file 22Apr16 from http://bioinf.wehi.edu.au/software/MSigDB/
+load("geneSets_for_CAMERA/human_Hallmark_v5.rdata")
 
-#put arguments into camera
-hallmarkMediaVsHighExos<-camera(y = eSet, index = index, design = HVE_design, contrast = contrMediaVsHighExos )
+#I want to use the following index that goes with the MSigDB hallmark gene sets
+hallmarkIndex<-ids2indices(gene.sets = Hs.H, identifiers = identifiers)
 
-pander(head(hallmarkMediaVsHighExos))
+#apply the function
+hallMarkResults<-lapply(contrNames, FUN = cameraTest, index = hallmarkIndex)
+
+#name the results dfs
+names(hallMarkResults)<-c("MediaVsLowExos","MediaVsHighExos","MediaVsSup","LowExosVsHighExos")
+
 ```
 
-Test 3 uses the MediaVsLowExos contrast
+Media Vs Low Exos
+```{r}
+pander(head(hallMarkResults[["MediaVsLowExos"]]))
+```
 
-```{r CAMERA test2}
-contrMediaVsLowExos<-makeContrasts(TreatmentLowExosomes - TreatmentMedia, levels = HVE_design)
+Media Vs High Exos
 
-#put arguments into camera
-hallmarkMediaVsLowExos<-camera(y = eSet, index = index, design = HVE_design, contrast = contrMediaVsLowExos )
+```{r}
+pander(head(hallMarkResults[["MediaVsHighExos"]]))
 
-pander(head(hallmarkMediaVsLowExos))
+
+# doi: 10.1042/BCJ20160006.
+```
+
+Media Vs Sup
+
+```{r}
+pander(head(hallMarkResults[["MediaVsSup"]]))
+
+#apparently there are a lot of reactive O2 species in semen.
+
+# Inactivation of human immunodeficiency virus type 1 by the amine oxidase-peroxidase system. PMID: 7559947
+
+
+#wikipedia says
+# xenobiotic metabolism (from the Greek xenos "stranger" and biotic "related to living beings") is the set of metabolic pathways that modify the chemical structure of xenobiotics, which are compounds foreign to an organism's normal biochemistry, such any drug or poison
+#results look drug related, but the "foreign substance" part makes sense in our context I guess.
+```
+
+Low Exos Vs High Exos
+```{r}
+pander(head(hallMarkResults[["LowExosVsHighExos"]]))
+```
+
+#GO gene sets: top 6 results
+
+```{r GO CAMERA test}
+
+
+#I'm going to do a CAMERA test using the MSigDB GO sets on all of my contrasts
+#downloaded 18Jan17 from http://bioinf.wehi.edu.au/software/MSigDB/
+load("geneSets_for_CAMERA/human_c5_v5p2.rdata")
+
+#I want to use the following index that goes with the GO gene sets
+GOindex<-ids2indices(gene.sets = Hs.c5, identifiers = identifiers)
+
+#apply the function
+GOresults<-lapply(contrNames, FUN = cameraTest, index = GOindex)
+
+#name the results dfs
+names(GOresults)<-c("MediaVsLowExos","MediaVsHighExos","MediaVsSup","LowExosVsHighExos")
+
+
+```
+
+
+
+Media Vs Low Exos
+```{r}
+pander(head(GOresults[["MediaVsLowExos"]]))
+```
+
+Media Vs High Exos
+
+```{r}
+pander(head(GOresults[["MediaVsHighExos"]]))
+```
+
+Media Vs Sup
+
+```{r}
+pander(head(GOresults[["MediaVsSup"]]))
+```
+
+Low Exos Vs High Exos
+```{r}
+pander(head(GOresults[["LowExosVsHighExos"]]))
 ```
