@@ -209,12 +209,211 @@ targets <-pData(valid_lumibatch)%>%
 Donor <-factor(targets$Donor)
 
 #I'm going to make a vector called "Condition" that is a combination of the Virus and exosome Treatment factors
-Condition <-factor(paste(targets$Virus, targets$Treatment, sep = "."))
+Condition <-paste(targets$Virus, targets$Treatment, sep = ".")
+
+#factor it and make levels in the order I want.
+Condition <- factor(Condition, levels = c("None.Media", "None.Liposomes", "None.Exosomes", "None.SeminalSupernatant", 
+"Sendai.Media", "Sendai.Liposomes", "Sendai.Exosomes", "Sendai.SeminalSupernatant", 
+"HIV.Media", "HIV.Liposomes", "HIV.Exosomes", "HIV.SeminalSupernatant") )
 
 
+#When I have ~0 for the intercept, each coeff represents the avg of the samples at each level of Treatment and Donor. If I had used ~1 instead, the intercept would represent the avg of the samples for the first factor level and the next coeff would represent the increase in the average of the first level over the 2nd level.
 
-
-#When I have ~0 for the intercept, each coeff represents the avg of the samples at each level of Treatment and Donor. If I had used ~1 instead, the intercept would represent the avg of the samples for Media and the next coeff would represent the increase in the average of LowExosomes OVER Media.
-
-HVE_design <-model.matrix(~0+Treatment+Donor)
+LC_design <-model.matrix(~0+Condition+Donor)
 ```
+
+```{r fit model and make contrasts}
+
+LC_fit <- lmFit(LC_expressedProbes_lumibatch, design = LC_design)
+
+LC_contrasts <- makeContrasts(
+  None.MediaVsNone.Exos = ConditionNone.Exosomes-ConditionNone.Media,
+  None.MediaVsNone.Lipo = ConditionNone.Liposomes-ConditionNone.Media,
+  None.MediaVsNone.Sup = ConditionNone.SeminalSupernatant-ConditionNone.Media,
+  Sendai.MediaVsSendai.Exos = ConditionSendai.Exosomes-ConditionSendai.Media,
+  Sendai.MediaVsSendai.Lipo = ConditionSendai.Liposomes-ConditionSendai.Media,
+  Sendai.MediaVsSendai.Sup = ConditionSendai.SeminalSupernatant-ConditionSendai.Media,
+  HIV.MediaVsHIV.Exos = ConditionHIV.Exosomes-ConditionHIV.Media,
+  HIV.MediaVsHIV.Lipo = ConditionHIV.Liposomes-ConditionHIV.Media,
+  HIV.MediaVsHIV.Sup = ConditionHIV.SeminalSupernatant-ConditionHIV.Media,
+  levels = LC_design)
+
+
+LC_fit2 <- contrasts.fit(LC_contrasts, fit = LC_fit)
+
+LC_fit2 <- eBayes(LC_fit2)
+
+```
+
+```{r probes per contrast}
+
+results <- decideTests(LC_fit2,method="separate", adjust.method="BH",
+                      p.value=0.05, lfc=0.5)
+
+#turn the results matrix into a data frame and make the
+#probeID a real column and remove the rownames
+
+resultsDF<-as.data.frame(results)
+resultsDF$ProbeID<-rownames(resultsDF)
+rownames(resultsDF)<-NULL
+
+#melt the df for easy summarizing
+
+resultsDFmelt<-melt(resultsDF, id.vars="ProbeID")
+
+summary<-resultsDFmelt %>%
+  group_by(variable)%>%
+ summarize(down=sum(value=="-1"),up=sum(value=="1"))
+
+pander(summary)
+
+```
+
+```{r None.MediaVsNone.Sup toptable}
+
+ttNone.MediaVsNone.Sup <- topTable(LC_fit2, coef = "None.MediaVsNone.Sup",
+                  adjust.method = "BH", number=Inf, p.value=0.05, lfc=0.5)
+
+#select the interesting columns
+
+pander(ttNone.MediaVsNone.Sup %>%
+  select(ProbeID, ENTREZ_GENE_ID,TargetID,DEFINITION, adj.P.Val))
+```
+
+```{r Sendai.MediaVsSendai.Sup toptable}
+
+ttSendai.MediaVsSendai.Sup <- topTable(LC_fit2, coef = "Sendai.MediaVsSendai.Sup",
+                  adjust.method = "BH", number=Inf, p.value=0.05, lfc=0.5)
+
+#select the interesting columns
+
+pander(ttSendai.MediaVsSendai.Sup %>%
+  select(ProbeID, ENTREZ_GENE_ID,TargetID,DEFINITION, adj.P.Val))
+```
+
+```{r HIV.MediaVsHIV.Sup toptable}
+
+ttHIV.MediaVsHIV.Sup <- topTable(LC_fit2, coef = "HIV.MediaVsHIV.Sup",
+                  adjust.method = "BH", number=Inf, p.value=0.05, lfc=0.5)
+
+#select the interesting columns
+
+pander(ttHIV.MediaVsHIV.Sup %>%
+  select(ProbeID, ENTREZ_GENE_ID,TargetID,DEFINITION, adj.P.Val))
+```
+# CAMERA testing
+
+##Hallmark gene sets: top 6 results
+
+```{r CAMERA set up}
+
+##Expression set to use
+
+eSet<-exprs(LC_expressedProbes_lumibatch)
+
+#IDs from eset: ProbeIDS from the data I'm analyzing (not the pre-determined gene set). There are some duplicates in there but I am leaving them in for now because I know they will be removed non-randomly. This means less power though I think.
+
+identifiers = as.character(fData(LC_expressedProbes_lumibatch)[,"ENTREZ_GENE_ID"])
+```
+
+
+```{r camera function}
+#a function to to a camera test looping over a list of contrasts
+#I have already defined the identifiers, design, index and y above
+
+contrNames<- list("None.MediaVsNone.Exos", "None.MediaVsNone.Lipo", "None.MediaVsNone.Sup", 
+"Sendai.MediaVsSendai.Exos", "Sendai.MediaVsSendai.Lipo", "Sendai.MediaVsSendai.Sup", 
+"HIV.MediaVsHIV.Exos", "HIV.MediaVsHIV.Lipo", "HIV.MediaVsHIV.Sup")
+
+#the function arguments allow you to use different contrasts and a different index
+cameraTest <- function (contrName, index){
+camera(y = eSet, index = index, design = LC_design, 
+            contrast = LC_contrasts[,contrName])#subset the LC_contrasts matrix and get one contrast at a time.
+  }
+```
+
+```{r camera test}
+#I'm going to do a CAMERA test using the MSigDB hallmark sets on all of my contrasts
+#downloaded Rdata file 22Apr16 from http://bioinf.wehi.edu.au/software/MSigDB/
+load("geneSets_for_CAMERA/human_Hallmark_v5.rdata")
+
+#I want to use the following index that goes with the MSigDB hallmark gene sets
+hallmarkIndex<-ids2indices(gene.sets = Hs.H, identifiers = identifiers)
+
+#apply the function
+hallMarkResults<-lapply(contrNames, FUN = cameraTest, index = hallmarkIndex)
+
+
+#name the results dfs
+names(hallMarkResults)<-contrNames
+```
+
+### None.Media Vs None.Exos
+
+```{r None.MediaVsNone.Exos }
+pander(head(hallMarkResults[["None.MediaVsNone.Exos"]]))
+```
+
+### None.Media Vs None.Lipo
+
+
+```{r None.MediaVsNone.Lipo}
+
+pander(head(hallMarkResults[["None.MediaVsNone.Lipo"]]))
+```
+
+
+### None.Media Vs None.Sup
+
+
+```{r None.MediaVsNone.Sup }
+
+pander(head(hallMarkResults[["None.MediaVsNone.Sup"]]))
+```
+
+
+### Sendai.Media Vs Sendai.Exo
+
+
+```{r Sendai.MediaVsSendai.Exos}
+pander(head(hallMarkResults[["Sendai.MediaVsSendai.Exos"]]))
+```
+
+### Sendai.Media Vs Sendai.Lipo
+
+```{r Sendai.MediaVsSendai.Lipo}
+
+pander(head(hallMarkResults[["Sendai.MediaVsSendai.Lipo"]]))
+```
+
+### Sendai.Media Vs Sendai.Sup
+
+```{r Sendai.MediaVsSendai.Sup }
+
+pander(head(hallMarkResults[["Sendai.MediaVsSendai.Sup"]]))
+```
+
+### HIV.Media Vs HIV.Exo
+
+```{r HIV.MediaVsHIV.Exos}
+pander(head(hallMarkResults[["HIV.MediaVsHIV.Exos"]]))
+```
+
+
+### HIV.Media Vs HIV.Lipo
+
+```{r HIV.MediaVsHIV.Lipo}
+
+pander(head(hallMarkResults[["HIV.MediaVsHIV.Lipo"]]))
+```
+
+
+### HIV.Media Vs HIV.Sup
+
+```{r HIV.MediaVsHIV.Sup }
+
+pander(head(hallMarkResults[["HIV.MediaVsHIV.Sup"]]))
+
+pandoc.table(head(hallMarkResults[["Sendai.MediaVsSendai.Sup"]]))
+```
+
