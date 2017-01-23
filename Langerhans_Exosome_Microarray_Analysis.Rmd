@@ -2,7 +2,7 @@
 title: 'Exosome Microarray Analysis: Langerhans cells only'
 author: "Claire Levy"
 date: "January 18, 2017"
-output: github_document
+output: html_document
 ---
 
 
@@ -72,7 +72,7 @@ LC_lumibatch<-valid_lumibatch[,valid_lumibatch$CellType == "LC"]
 
 Plots of non-normalized data
 
-```{r density}
+```{r density, cache = TRUE}
 
 density(LC_lumibatch)
 ```
@@ -125,7 +125,7 @@ QNTB_LC_lumibatch<-lumiQ(NTB_LC_lumibatch)
 ```
 
 
-```{r norm density}
+```{r norm density, cache = TRUE}
 
 density(QNTB_LC_lumibatch)
 ```
@@ -184,6 +184,8 @@ LC_detectedProbes <- rowSums(detection(QNTB_LC_lumibatch)<0.05)>= 3
 #now extract just those probes that are TRUE from the lumibatch
 
 LC_expressedProbes_lumibatch <-QNTB_LC_lumibatch[LC_detectedProbes,]
+
+save(LC_expressedProbes_lumibatch, file = "R_output/LC_expressedProbes_lumibatch")
 ```
 
 
@@ -245,6 +247,8 @@ LC_fit2 <- eBayes(LC_fit2)
 
 ```
 
+### Number of DE probes for each contrast: 
+
 ```{r probes per contrast}
 
 results <- decideTests(LC_fit2,method="separate", adjust.method="BH",
@@ -268,6 +272,7 @@ summary<-resultsDFmelt %>%
 pander(summary)
 
 ```
+### None.Media Vs None.Sup DE genes
 
 ```{r None.MediaVsNone.Sup toptable}
 
@@ -277,8 +282,9 @@ ttNone.MediaVsNone.Sup <- topTable(LC_fit2, coef = "None.MediaVsNone.Sup",
 #select the interesting columns
 
 pander(ttNone.MediaVsNone.Sup %>%
-  select(ProbeID, ENTREZ_GENE_ID,TargetID,DEFINITION, adj.P.Val))
+  select(TargetID,DEFINITION, adj.P.Val))
 ```
+### Sendai.Media Vs Sendai.Sup DE genes
 
 ```{r Sendai.MediaVsSendai.Sup toptable}
 
@@ -288,8 +294,9 @@ ttSendai.MediaVsSendai.Sup <- topTable(LC_fit2, coef = "Sendai.MediaVsSendai.Sup
 #select the interesting columns
 
 pander(ttSendai.MediaVsSendai.Sup %>%
-  select(ProbeID, ENTREZ_GENE_ID,TargetID,DEFINITION, adj.P.Val))
+  select(TargetID,DEFINITION, adj.P.Val))
 ```
+### HIV.Media Vs HIV.Sup DE genes
 
 ```{r HIV.MediaVsHIV.Sup toptable}
 
@@ -299,7 +306,7 @@ ttHIV.MediaVsHIV.Sup <- topTable(LC_fit2, coef = "HIV.MediaVsHIV.Sup",
 #select the interesting columns
 
 pander(ttHIV.MediaVsHIV.Sup %>%
-  select(ProbeID, ENTREZ_GENE_ID,TargetID,DEFINITION, adj.P.Val))
+  select(TargetID,DEFINITION, adj.P.Val))
 ```
 # CAMERA testing
 
@@ -332,7 +339,7 @@ camera(y = eSet, index = index, design = LC_design,
   }
 ```
 
-```{r camera test}
+```{r camera test hallmark}
 #I'm going to do a CAMERA test using the MSigDB hallmark sets on all of my contrasts
 #downloaded Rdata file 22Apr16 from http://bioinf.wehi.edu.au/software/MSigDB/
 load("geneSets_for_CAMERA/human_Hallmark_v5.rdata")
@@ -348,72 +355,175 @@ hallMarkResults<-lapply(contrNames, FUN = cameraTest, index = hallmarkIndex)
 names(hallMarkResults)<-contrNames
 ```
 
+```{r table function}
+
+#here is a function to display the results of the camera test in the way that I want
+
+make_nice_table <- function(resultList, contrast){
+  
+  pander(head(resultList[[contrast]]%>%
+                select(NGenes, Direction, FDR)))
+
+}
+
+
+
+```
+
 ### None.Media Vs None.Exos
 
-```{r None.MediaVsNone.Exos }
-pander(head(hallMarkResults[["None.MediaVsNone.Exos"]]))
+```{r  hallmark None.MediaVsNone.Exos }
+make_nice_table(hallMarkResults, "None.MediaVsNone.Exos")
 ```
 
 ### None.Media Vs None.Lipo
 
 
-```{r None.MediaVsNone.Lipo}
+```{r  hallmark None.MediaVsNone.Lipo}
+make_nice_table(hallMarkResults, "None.MediaVsNone.Lipo")
 
-pander(head(hallMarkResults[["None.MediaVsNone.Lipo"]]))
 ```
 
 
 ### None.Media Vs None.Sup
 
 
-```{r None.MediaVsNone.Sup }
+```{r hallmark None.MediaVsNone.Sup }
 
-pander(head(hallMarkResults[["None.MediaVsNone.Sup"]]))
+make_nice_table(hallMarkResults, "None.MediaVsNone.Sup")
+
 ```
 
 
 ### Sendai.Media Vs Sendai.Exo
 
 
-```{r Sendai.MediaVsSendai.Exos}
-pander(head(hallMarkResults[["Sendai.MediaVsSendai.Exos"]]))
+```{r hallmark Sendai.MediaVsSendai.Exos}
+make_nice_table(hallMarkResults, "Sendai.MediaVsSendai.Exos")
+
 ```
 
 ### Sendai.Media Vs Sendai.Lipo
 
-```{r Sendai.MediaVsSendai.Lipo}
+```{r hallmark Sendai.MediaVsSendai.Lipo}
 
-pander(head(hallMarkResults[["Sendai.MediaVsSendai.Lipo"]]))
+make_nice_table(hallMarkResults, "Sendai.MediaVsSendai.Lipo")
 ```
 
 ### Sendai.Media Vs Sendai.Sup
 
-```{r Sendai.MediaVsSendai.Sup }
+```{r hallmark Sendai.MediaVsSendai.Sup }
 
-pander(head(hallMarkResults[["Sendai.MediaVsSendai.Sup"]]))
+make_nice_table(hallMarkResults, "Sendai.MediaVsSendai.Sup")
 ```
 
 ### HIV.Media Vs HIV.Exo
 
-```{r HIV.MediaVsHIV.Exos}
-pander(head(hallMarkResults[["HIV.MediaVsHIV.Exos"]]))
+```{r hallmark HIV.MediaVsHIV.Exos}
+make_nice_table(hallMarkResults, "HIV.MediaVsHIV.Exos")
 ```
 
 
 ### HIV.Media Vs HIV.Lipo
 
-```{r HIV.MediaVsHIV.Lipo}
+```{r hallmark HIV.MediaVsHIV.Lipo}
 
-pander(head(hallMarkResults[["HIV.MediaVsHIV.Lipo"]]))
+make_nice_table(hallMarkResults, "HIV.MediaVsHIV.Lipo")
 ```
 
 
 ### HIV.Media Vs HIV.Sup
 
-```{r HIV.MediaVsHIV.Sup }
+```{r hallmark HIV.MediaVsHIV.Sup }
 
-pander(head(hallMarkResults[["HIV.MediaVsHIV.Sup"]]))
+make_nice_table(hallMarkResults, "HIV.MediaVsHIV.Sup")
+```
+## GO biological process gene sets: top 6 results
 
-pandoc.table(head(hallMarkResults[["Sendai.MediaVsSendai.Sup"]]))
+Sean wrote some code (https://github.com/seaaan/Bioinformatics/tree/master/GOTermMappingsForCamera) to extract just the Biological Process gene sets out of all the GO gene sets. I will use those to test against the LC data here.
+
+```{r camera test GObp}
+
+#load the GO biological process gene sets
+load("geneSets_for_CAMERA/Hs.c5.BP.rdata")
+
+#I want to use the following index that goes with the GO.bp gene sets and the same entrez ID identifiers that I defined in the "camera set up" chunk
+GObpIndex<-ids2indices(gene.sets = Hs.c5.BP, identifiers = identifiers)
+
+#apply the function that I defined in the camera function chunk, using the same contrNames as the contrasts and the new GObpIndex. This will also use the same Eset as before, LC_expressedProbes_lumibatch and the same design.
+
+GObpResults<-lapply(contrNames, FUN = cameraTest, index = GObpIndex)
+
+
+#name the results dfs
+names(GObpResults)<-contrNames
 ```
 
+### None.Media Vs None.Exos
+
+```{r  GObp None.MediaVsNone.Exos }
+make_nice_table(GObpResults, "None.MediaVsNone.Exos")
+```
+
+### None.Media Vs None.Lipo
+
+
+```{r  GObp None.MediaVsNone.Lipo}
+make_nice_table(GObpResults, "None.MediaVsNone.Lipo")
+
+```
+
+
+### None.Media Vs None.Sup
+
+
+```{r GObp None.MediaVsNone.Sup }
+
+make_nice_table(GObpResults, "None.MediaVsNone.Sup")
+
+```
+
+
+### Sendai.Media Vs Sendai.Exo
+
+
+```{r GObp Sendai.MediaVsSendai.Exos}
+make_nice_table(GObpResults, "Sendai.MediaVsSendai.Exos")
+
+```
+
+### Sendai.Media Vs Sendai.Lipo
+
+```{r GObp Sendai.MediaVsSendai.Lipo}
+
+make_nice_table(GObpResults, "Sendai.MediaVsSendai.Lipo")
+```
+
+### Sendai.Media Vs Sendai.Sup
+
+```{r GObp Sendai.MediaVsSendai.Sup }
+
+make_nice_table(GObpResults, "Sendai.MediaVsSendai.Sup")
+```
+
+### HIV.Media Vs HIV.Exo
+
+```{r HIV.MediaVsHIV.Exos}
+make_nice_table(GObpResults, "HIV.MediaVsHIV.Exos")
+```
+
+
+### HIV.Media Vs HIV.Lipo
+
+```{r GObp HIV.MediaVsHIV.Lipo}
+
+make_nice_table(GObpResults, "HIV.MediaVsHIV.Lipo")
+```
+
+
+### HIV.Media Vs HIV.Sup
+
+```{r GObp HIV.MediaVsHIV.Sup }
+
+make_nice_table(GObpResults, "HIV.MediaVsHIV.Sup")
+```
