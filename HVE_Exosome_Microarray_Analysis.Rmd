@@ -176,7 +176,7 @@ QNTB_HVE_lumibatch<-lumiQ(NTB_HVE_lumibatch)
 
 ```
 
-# Non-specific filtering
+### Non-specific filtering
 
 Limma suggests to keep probes that are expressed above background on at least n arrays where n is smallest number of replicates assigned to any of the treatment combinations.
 
@@ -201,6 +201,9 @@ HVE_detectedProbes <- rowSums(detection(QNTB_HVE_lumibatch)<0.05)>= 3
 #now extract just those probes that are TRUE from the lumibatch
 
 HVE_expressedProbes_lumibatch <-QNTB_HVE_lumibatch[HVE_detectedProbes,]
+
+save(HVE_expressedProbes_lumibatch, file = "R_output/HVE_expressedProbes_lumibatch.Rdata")
+
 ```
 
 Number of probes in data set before filtering:
@@ -248,7 +251,7 @@ HVE_fit2 <-eBayes(HVE_fit2)
 ```
 
 
-How many DE probes  were in each contrast?
+### Number of DE probes for each contrast:
 ```{r, how many probes are up and down regulated}
 
 #method=separate is same as doing topTable for all coefs separately
@@ -275,15 +278,19 @@ summary<-resultsDFmelt %>%
 pander(summary)
 ```
 
-
+### Media Vs Sup DE genes
 ```{r toptable for MediaVsSup contrast}
 
 ttMediaVsSup<- topTable(HVE_fit2, coef = "MediaVsSup", adjust.method = "BH", number=Inf, p.value=0.05, lfc=0.5)
+
+
+pander(ttMediaVsSup%>%
+         select(TargetID, DEFINITION, adj.P.Val))
 ```
 
-## CAMERA testing
+# CAMERA testing
 
-#Hallmark gene sets: top 6 results
+## Hallmark gene sets: top 6 results
 
 ```{r CAMERA setup}
 
@@ -313,6 +320,8 @@ camera(y = eSet, index = index, design = HVE_design,
 ```{r Hallmark CAMERA test}
 #I'm going to do a CAMERA test using the MSigDB hallmark sets on all of my contrasts
 #downloaded Rdata file 22Apr16 from http://bioinf.wehi.edu.au/software/MSigDB/
+
+
 load("geneSets_for_CAMERA/human_Hallmark_v5.rdata")
 
 #I want to use the following index that goes with the MSigDB hallmark gene sets
@@ -326,81 +335,97 @@ names(hallMarkResults)<-c("MediaVsLowExos","MediaVsHighExos","MediaVsSup","LowEx
 
 ```
 
-Media Vs Low Exos
-```{r}
-pander(head(hallMarkResults[["MediaVsLowExos"]]))
+
+```{r table function}
+
+#here is a function to display the results of the camera test in the way that I want
+
+make_nice_table <- function(resultList, contrast){
+  
+  pander(head(resultList[[contrast]]%>%
+                select(NGenes, Direction, FDR)))
+
+}
+
 ```
 
-Media Vs High Exos
 
+### Media Vs Low Exos
 ```{r}
-pander(head(hallMarkResults[["MediaVsHighExos"]]))
-
-
-# doi: 10.1042/BCJ20160006.
+make_nice_table(hallMarkResults, "MediaVsLowExos")
 ```
 
-Media Vs Sup
+### Media Vs High Exos
+
+See: doi: 10.1042/BCJ20160006
 
 ```{r}
-pander(head(hallMarkResults[["MediaVsSup"]]))
+make_nice_table(hallMarkResults, "MediaVsHighExos")
 
-#apparently there are a lot of reactive O2 species in semen.
-
-# Inactivation of human immunodeficiency virus type 1 by the amine oxidase-peroxidase system. PMID: 7559947
-
-
-#wikipedia says
-# xenobiotic metabolism (from the Greek xenos "stranger" and biotic "related to living beings") is the set of metabolic pathways that modify the chemical structure of xenobiotics, which are compounds foreign to an organism's normal biochemistry, such any drug or poison
-#results look drug related, but the "foreign substance" part makes sense in our context I guess.
 ```
 
-Low Exos Vs High Exos
+### Media Vs Sup
+Apparently there are a lot of reactive O2 species in semen.
+See: Inactivation of human immunodeficiency virus type 1 by the amine oxidase-peroxidase system. PMID: 7559947
+
+wikipedia says:
+ xenobiotic metabolism (from the Greek xenos "stranger" and biotic "related to living beings") is the set of metabolic pathways that modify the chemical structure of xenobiotics, which are compounds foreign to an organism's normal biochemistry, such any drug or poison
+Results look drug related, but the "foreign substance" part makes sense in our context I guess.
+
 ```{r}
-pander(head(hallMarkResults[["LowExosVsHighExos"]]))
+make_nice_table(hallMarkResults, "MediaVsSup")
+
 ```
 
-#GO gene sets: top 6 results
+### Low Exos Vs High Exos
+```{r}
+make_nice_table(hallMarkResults, "LowExosVsHighExos")
+```
 
-```{r GO CAMERA test}
+## GO biological process gene sets: top 6 results
+
+Sean wrote some code (https://github.com/seaaan/Bioinformatics/tree/master/GOTermMappingsForCamera) to extract just the Biological Process gene sets out of all the GO gene sets. I will use those to test against the HVE data here.
 
 
-#I'm going to do a CAMERA test using the MSigDB GO sets on all of my contrasts
-#downloaded 18Jan17 from http://bioinf.wehi.edu.au/software/MSigDB/
-load("geneSets_for_CAMERA/human_c5_v5p2.rdata")
+```{r GObp CAMERA test}
 
-#I want to use the following index that goes with the GO gene sets
-GOindex<-ids2indices(gene.sets = Hs.c5, identifiers = identifiers)
 
-#apply the function
-GOresults<-lapply(contrNames, FUN = cameraTest, index = GOindex)
+#load the GO biological process gene sets
+load("geneSets_for_CAMERA/Hs.c5.BP.rdata")
+
+#I want to use the following index that goes with the GO.bp gene sets and the same entrez ID identifiers that I defined in the "camera set up" chunk
+GObpIndex<-ids2indices(gene.sets = Hs.c5.BP, identifiers = identifiers)
+
+#apply the function that I defined in the camera function chunk, using the same contrNames as the contrasts and the new GObpIndex. This will also use the same Eset as before, HVE_expressedProbes_lumibatch and the same design.
+
+GObpResults<-lapply(contrNames, FUN = cameraTest, index = GObpIndex)
+
 
 #name the results dfs
-names(GOresults)<-c("MediaVsLowExos","MediaVsHighExos","MediaVsSup","LowExosVsHighExos")
-
+names(GObpResults)<-contrNames
 
 ```
 
 
 
-Media Vs Low Exos
+### Media Vs Low Exos
 ```{r}
-pander(head(GOresults[["MediaVsLowExos"]]))
+make_nice_table(GObpResults,"MediaVsLowExos")
 ```
 
-Media Vs High Exos
+### Media Vs High Exos
 
 ```{r}
-pander(head(GOresults[["MediaVsHighExos"]]))
+make_nice_table(GObpResults,"MediaVsHighExos")
 ```
 
-Media Vs Sup
+### Media Vs Sup
 
 ```{r}
-pander(head(GOresults[["MediaVsSup"]]))
+make_nice_table(GObpResults,"MediaVsSup")
 ```
 
-Low Exos Vs High Exos
+### Low Exos Vs High Exos
 ```{r}
-pander(head(GOresults[["LowExosVsHighExos"]]))
+make_nice_table(GObpResults,"LowExosVsHighExos")
 ```
