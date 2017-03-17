@@ -1,0 +1,530 @@
+---
+title: 'Exosome Microarray Analysis: No Donor A, Langerhans cells only'
+author: "Claire Levy"
+date: "January 18, 2017"
+output: html_document
+---
+
+
+## Experiment overview
+
+Experiments were done on two cells types: Langerhans cells and vaginal epithelial cells.
+
+Langerhans cells from 3 donors were exposed to HIV, Sendai virus or no virus and each of those were exposed to the following:
+
+* Exosomes
+* Seminal supernatant
+* Liposomes
+* Media control
+
+## The following analysis is only for Langerhans cells and only for Donors B and C
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+library(dplyr)
+library(lumi)
+library(limma)
+library(pander)
+library(stringr)
+library(ggplot2)
+library(reshape2)
+
+```
+
+```{r load lumibatch data and subset , cache = TRUE}
+
+#note that the sampleNames are NOT syntactically valid, here (they have "-")
+lumibatch<-lumiR(fileName = "..\\raw_data\\FinalReport.txt",
+            detectionTh = 0.05,
+            annotationColumn=c('ENTREZ_GENE_ID','ACCESSION', 'SYMBOL', 'PROBE_SEQUENCE', 'PROBE_START', 'CHROMOSOME', 'PROBE_CHR_ORIENTATION', 'PROBE_COORDINATES', 'DEFINITION'))
+
+#read in pData
+pData <- read.table("..\\raw_data\\SampleInformation.txt", header = TRUE)
+
+#make names valid in pData
+corrected_pData <- pData %>%
+  mutate(ArrayName = str_replace(ArrayName,"-","_"))%>%
+  mutate(Donor = str_replace(Donor, "-","_"))
+
+#make the rownames of pData the sample as the ArrayName
+row.names(corrected_pData)<-corrected_pData$ArrayName
+
+
+#make names valid in lumibatch
+sampleNames(lumibatch)<- unique(corrected_pData$ArrayName)
+
+#put pData into an adf
+adf<-AnnotatedDataFrame(data=corrected_pData)
+
+
+valid_lumibatch<-new("LumiBatch",
+                     assayData = assayData(lumibatch),
+                     phenoData = adf,
+                     detection = detection(lumibatch),
+                     controlData = controlData(lumibatch),
+                     featureData = featureData(lumibatch))
+
+#subset lumibatch for just the HVE cells
+LC_lumibatch<-valid_lumibatch[,valid_lumibatch$CellType == "LC"]
+
+no_A_LC_lumibatch <- LC_lumibatch[,LC_lumibatch$Donor != "LC_A"]
+```
+
+
+Plots of non-normalized data
+
+```{r density, cache = TRUE}
+
+density(no_A_LC_lumibatch)
+```
+
+```{r non-norm}
+dimensional_data <- plotMDS(no_A_LC_lumibatch)#make the plot, it invisibly returns a large object that has the actual dimensions data in matrices called x and y (one for each dimension)
+
+#make a data frame where
+d <- data.frame(Dim1 = dimensional_data$x, #Dim1 is a column containing the values from the x matrix
+               Dim2 = dimensional_data$y, #Dim2 is a column containing the values from the y matrix
+               ArrayName = names(dimensional_data$x))#SampleID is a column that holds the column names from the x matrix, which happen to be the microarray wells.
+
+d <- as_data_frame(merge(d, pData(no_A_LC_lumibatch)), by = "ArrayName")
+```
+
+```{r non norm MSD plot}
+
+ggplot(d, aes(x = Dim1, y = Dim2))+
+  geom_point(aes(color = Treatment, shape = Virus))
+
+ggplot(d, aes(x = Dim1, y = Dim2))+
+  geom_point(aes(color = Treatment, shape = Virus))+
+  facet_wrap(~Donor)
+```
+
+```{r non norm boxplot}
+
+boxplot(no_A_LC_lumibatch)
+```
+
+```{r background correct transform normalize, results = 'hide'}
+
+		#the data we got from the core had no background correction (I don't think it did anyway...) so I will do it here.
+B_no_A_LC_lumibatch<-lumiB(no_A_LC_lumibatch, method = "bgAdjust")
+
+
+# VST TRANSFORMATION 
+#"Stabilizing the expression variance based on
+#the bead level expression variance and mean relations"
+
+TB_no_A_LC_lumibatch <-lumiT (B_no_A_LC_lumibatch, method = 'vst')
+#can do this to look at a plot. plotting doesn't work if I do method = "log2"
+# plotVST(TB_no_A_no_A_LC_lumibatch)
+
+#quantile normalization
+NTB_no_A_LC_lumibatch<-lumiN(TB_no_A_LC_lumibatch,method="quantile")
+
+#QC
+QNTB_no_A_LC_lumibatch<-lumiQ(NTB_no_A_LC_lumibatch)
+```
+
+
+```{r norm density, cache = TRUE}
+
+density(QNTB_no_A_LC_lumibatch)
+```
+
+```{r norm MDS}
+
+norm_dimensional_data <- plotMDS(QNTB_no_A_LC_lumibatch)#make the plot, it invisibly returns a large object that has the actual dimensions data in matrices called x and y (one for each dimension)
+
+#make a data frame where
+normd <- data.frame(Dim1 = norm_dimensional_data$x, #Dim1 is a column containing the values from the x matrix
+               Dim2 = norm_dimensional_data$y, #Dim2 is a column containing the values from the y matrix
+               ArrayName = names(norm_dimensional_data$x))#SampleID is a column that holds the column names from the x matrix, which happen to be the microarray wells.
+
+normd <- as_data_frame(merge(normd, pData(QNTB_no_A_LC_lumibatch)), by = "ArrayName")
+
+
+
+ggplot(normd, aes(x=Dim1, y = Dim2))+
+  geom_point(aes(shape = Virus, color = Treatment))
+
+
+ggplot(normd, aes(x=Dim1, y = Dim2))+
+  geom_point(aes(shape = Virus, color = Treatment))+
+  facet_wrap(~Donor)
+
+
+```
+
+```{r normed boxplot}
+boxplot(QNTB_no_A_LC_lumibatch)
+```
+
+
+## Non-specific filtering
+
+Limma suggests to keep probes that are expressed above background on at least n arrays where n is smallest number of replicates assigned to any of the treatment combinations.
+
+ We have 3 donors x 3 viruses x 4 Treatments so I will keep probes with detection levels above background in at least 3 samples.
+ 
+```{r ns filtering}
+ #this is how the detection filtering works:
+#Mark the detection pvalues (there is one per probe per sample) with a 1 if <0.05 or a 0 if >0.05
+# using (detection(QNTB.complete.RAW.lumi)<0.05)
+
+#add up the 0's and 1's across each row (i.e. for all the samples)
+#using rowSums
+
+#now you have the number of detection p values <0.05 for each probe
+#for all the samples (max possible = total samples)
+
+#now tell me which probes have a rowSum of >=3 (probes will be marked as TRUE
+# or false if they do or do not have >=3 rowSum)
+
+no_A_LC_detectedProbes <- rowSums(detection(QNTB_no_A_LC_lumibatch)<0.05)>= 3
+
+#now extract just those probes that are TRUE from the lumibatch
+
+no_A_LC_expressedProbes_lumibatch <-QNTB_no_A_LC_lumibatch[no_A_LC_detectedProbes,]
+
+save(no_A_LC_expressedProbes_lumibatch, file = "R_output/LC_expressedProbes_lumibatch")
+```
+
+
+Number of probes in data set before filtering:
+
+```{r probes before}
+dims(QNTB_no_A_LC_lumibatch)
+```
+
+Number of probes in data set after filtering:
+
+
+```{r probes after}
+dims(no_A_LC_expressedProbes_lumibatch)
+```
+
+```{r targets and design}
+
+no_A_targets <-pData(no_A_LC_lumibatch)%>%
+  select(Donor,Virus, Treatment)
+
+Donor <-factor(no_A_targets$Donor)
+
+#I'm going to make a vector called "Condition" that is a combination of the Virus and exosome Treatment factors
+Condition <-paste(no_A_targets$Virus, no_A_targets$Treatment, sep = ".")
+
+#factor it and make levels in the order I want.
+Condition <- factor(Condition, levels = c("None.Media", "None.Liposomes", "None.Exosomes", "None.SeminalSupernatant", 
+"Sendai.Media", "Sendai.Liposomes", "Sendai.Exosomes", "Sendai.SeminalSupernatant", 
+"HIV.Media", "HIV.Liposomes", "HIV.Exosomes", "HIV.SeminalSupernatant") )
+
+
+#When I have ~0 for the intercept, each coeff represents the avg of the samples at each level of Treatment and Donor. If I had used ~1 instead, the intercept would represent the avg of the samples for the first factor level and the next coeff would represent the increase in the average of the first level over the 2nd level.
+
+no_A_LC_design <-model.matrix(~0+Condition+Donor)
+```
+
+```{r fit model and make contrasts}
+
+no_A_LC_fit <- lmFit(no_A_LC_expressedProbes_lumibatch, design = no_A_LC_design)
+
+no_A_LC_contrasts <- makeContrasts(
+  None.MediaVsNone.Exos = ConditionNone.Exosomes-ConditionNone.Media,
+  None.MediaVsNone.Lipo = ConditionNone.Liposomes-ConditionNone.Media,
+  None.MediaVsNone.Sup = ConditionNone.SeminalSupernatant-ConditionNone.Media,
+  Sendai.MediaVsSendai.Exos = ConditionSendai.Exosomes-ConditionSendai.Media,
+  Sendai.MediaVsSendai.Lipo = ConditionSendai.Liposomes-ConditionSendai.Media,
+  Sendai.MediaVsSendai.Sup = ConditionSendai.SeminalSupernatant-ConditionSendai.Media,
+  HIV.MediaVsHIV.Exos = ConditionHIV.Exosomes-ConditionHIV.Media,
+  HIV.MediaVsHIV.Lipo = ConditionHIV.Liposomes-ConditionHIV.Media,
+  HIV.MediaVsHIV.Sup = ConditionHIV.SeminalSupernatant-ConditionHIV.Media,
+  levels = no_A_LC_design)
+
+
+no_A_LC_fit2 <- contrasts.fit(no_A_LC_contrasts, fit = no_A_LC_fit)
+
+no_A_LC_fit2 <- eBayes(no_A_LC_fit2)
+
+```
+
+### Number of DE probes for each contrast: 
+
+```{r probes per contrast}
+
+results <- decideTests(no_A_LC_fit2,method="separate", adjust.method="BH",
+                      p.value=0.05, lfc=0.5)
+
+#turn the results matrix into a data frame and make the
+#probeID a real column and remove the rownames
+
+resultsDF<-as.data.frame(results)
+resultsDF$ProbeID<-rownames(resultsDF)
+rownames(resultsDF)<-NULL
+
+#melt the df for easy summarizing
+
+resultsDFmelt<-melt(resultsDF, id.vars="ProbeID")
+
+summary<-resultsDFmelt %>%
+  group_by(variable)%>%
+ summarize(down=sum(value=="-1"),up=sum(value=="1"))
+
+pander(summary)
+
+```
+
+
+```{r None.MediaVsNone.Sup toptable}
+
+#commenting this out since there weren't and DE probes for this contrast
+# 
+# ttNone.MediaVsNone.Sup <- topTable(LC_fit2, coef = "None.MediaVsNone.Sup",
+#                   adjust.method = "BH", number=Inf, p.value=0.05, lfc=0.5)
+# 
+# #select the interesting columns
+# 
+# pander(ttNone.MediaVsNone.Sup %>%
+#   select(TargetID,DEFINITION, adj.P.Val))
+```
+
+
+```{r Sendai.MediaVsSendai.Sup toptable}
+#commenting this out since there weren't and DE probes for this contrast
+# ttSendai.MediaVsSendai.Sup <- topTable(LC_fit2, coef = "Sendai.MediaVsSendai.Sup",
+#                   adjust.method = "BH", number=Inf, p.value=0.05, lfc=0.5)
+# 
+# #select the interesting columns
+# 
+# pander(ttSendai.MediaVsSendai.Sup %>%
+#   select(TargetID,DEFINITION, adj.P.Val))
+```
+### HIV.Media Vs HIV.Sup DE genes
+
+```{r HIV.MediaVsHIV.Sup toptable}
+
+ttHIV.MediaVsHIV.Sup <- topTable(no_A_LC_fit2, coef = "HIV.MediaVsHIV.Sup",
+                  adjust.method = "BH", number=Inf, p.value=0.05, lfc=0.5)
+
+#select the interesting columns
+
+pander(ttHIV.MediaVsHIV.Sup %>%
+  select(TargetID,DEFINITION, adj.P.Val))
+```
+# CAMERA testing
+
+##Hallmark gene sets: top 6 results
+
+```{r CAMERA set up}
+
+##Expression set to use
+
+eSet<-exprs(no_A_LC_expressedProbes_lumibatch)
+
+#IDs from eset: ProbeIDS from the data I'm analyzing (not the pre-determined gene set). There are some duplicates in there but I am leaving them in for now because I know they will be removed non-randomly. This means less power though I think.
+
+identifiers = as.character(fData(no_A_LC_expressedProbes_lumibatch)[,"ENTREZ_GENE_ID"])
+```
+
+
+```{r camera function}
+#a function to to a camera test looping over a list of contrasts
+#I have already defined the identifiers, design, index and y above
+
+contrNames<- list("None.MediaVsNone.Exos", "None.MediaVsNone.Lipo", "None.MediaVsNone.Sup", 
+"Sendai.MediaVsSendai.Exos", "Sendai.MediaVsSendai.Lipo", "Sendai.MediaVsSendai.Sup", 
+"HIV.MediaVsHIV.Exos", "HIV.MediaVsHIV.Lipo", "HIV.MediaVsHIV.Sup")
+
+#the function arguments allow you to use different contrasts and a different index
+cameraTest <- function (contrName, index){
+camera(y = eSet, index = index, design = no_A_LC_design, 
+            contrast = no_A_LC_contrasts[,contrName])#subset the LC_contrasts matrix and get one contrast at a time.
+  }
+```
+
+```{r camera test hallmark}
+#I'm going to do a CAMERA test using the MSigDB hallmark sets on all of my contrasts
+#downloaded Rdata file 22Apr16 from http://bioinf.wehi.edu.au/software/MSigDB/
+load("geneSets_for_CAMERA/human_Hallmark_v5.rdata")
+
+#I want to use the following index that goes with the MSigDB hallmark gene sets
+hallmarkIndex<-ids2indices(gene.sets = Hs.H, identifiers = identifiers)
+
+#apply the function
+hallMarkResults<-lapply(contrNames, FUN = cameraTest, index = hallmarkIndex)
+
+
+#name the results dfs
+names(hallMarkResults)<-contrNames
+```
+
+```{r table function}
+
+#here is a function to display the results of the camera test in the way that I want
+
+make_nice_table <- function(resultList, contrast){
+  
+  pander(head(resultList[[contrast]]%>%
+                select(NGenes, Direction, FDR)))
+
+}
+
+```
+
+### None.Media Vs None.Exos
+
+```{r  hallmark None.MediaVsNone.Exos }
+make_nice_table(hallMarkResults, "None.MediaVsNone.Exos")
+```
+
+### None.Media Vs None.Lipo
+
+
+```{r  hallmark None.MediaVsNone.Lipo}
+make_nice_table(hallMarkResults, "None.MediaVsNone.Lipo")
+
+```
+
+
+### None.Media Vs None.Sup
+
+
+```{r hallmark None.MediaVsNone.Sup }
+
+make_nice_table(hallMarkResults, "None.MediaVsNone.Sup")
+
+```
+
+
+### Sendai.Media Vs Sendai.Exo
+
+
+```{r hallmark Sendai.MediaVsSendai.Exos}
+make_nice_table(hallMarkResults, "Sendai.MediaVsSendai.Exos")
+
+```
+
+### Sendai.Media Vs Sendai.Lipo
+
+```{r hallmark Sendai.MediaVsSendai.Lipo}
+
+make_nice_table(hallMarkResults, "Sendai.MediaVsSendai.Lipo")
+```
+
+### Sendai.Media Vs Sendai.Sup
+
+```{r hallmark Sendai.MediaVsSendai.Sup }
+
+make_nice_table(hallMarkResults, "Sendai.MediaVsSendai.Sup")
+```
+
+### HIV.Media Vs HIV.Exo
+
+```{r hallmark HIV.MediaVsHIV.Exos}
+make_nice_table(hallMarkResults, "HIV.MediaVsHIV.Exos")
+```
+
+
+### HIV.Media Vs HIV.Lipo
+
+```{r hallmark HIV.MediaVsHIV.Lipo}
+
+make_nice_table(hallMarkResults, "HIV.MediaVsHIV.Lipo")
+```
+
+
+### HIV.Media Vs HIV.Sup
+
+```{r hallmark HIV.MediaVsHIV.Sup }
+
+make_nice_table(hallMarkResults, "HIV.MediaVsHIV.Sup")
+```
+## GO biological process gene sets: top 6 results
+
+Sean wrote some code (https://github.com/seaaan/Bioinformatics/tree/master/GOTermMappingsForCamera) to extract just the Biological Process gene sets out of all the GO gene sets. I will use those to test against the LC data here.
+
+```{r camera test GObp}
+
+#load the GO biological process gene sets
+load("geneSets_for_CAMERA/Hs.c5.BP.rdata")
+
+#I want to use the following index that goes with the GO.bp gene sets and the same entrez ID identifiers that I defined in the "camera set up" chunk
+GObpIndex<-ids2indices(gene.sets = Hs.c5.BP, identifiers = identifiers)
+
+#apply the function that I defined in the camera function chunk, using the same contrNames as the contrasts and the new GObpIndex. This will also use the same Eset as before, LC_expressedProbes_lumibatch and the same design.
+
+GObpResults<-lapply(contrNames, FUN = cameraTest, index = GObpIndex)
+
+
+#name the results dfs
+names(GObpResults)<-contrNames
+```
+
+### None.Media Vs None.Exos
+
+```{r  GObp None.MediaVsNone.Exos }
+make_nice_table(GObpResults, "None.MediaVsNone.Exos")
+```
+
+### None.Media Vs None.Lipo
+
+
+```{r  GObp None.MediaVsNone.Lipo}
+make_nice_table(GObpResults, "None.MediaVsNone.Lipo")
+
+```
+
+
+### None.Media Vs None.Sup
+
+
+```{r GObp None.MediaVsNone.Sup }
+
+make_nice_table(GObpResults, "None.MediaVsNone.Sup")
+
+```
+
+
+### Sendai.Media Vs Sendai.Exo
+
+
+```{r GObp Sendai.MediaVsSendai.Exos}
+make_nice_table(GObpResults, "Sendai.MediaVsSendai.Exos")
+
+```
+
+### Sendai.Media Vs Sendai.Lipo
+
+```{r GObp Sendai.MediaVsSendai.Lipo}
+
+make_nice_table(GObpResults, "Sendai.MediaVsSendai.Lipo")
+```
+
+### Sendai.Media Vs Sendai.Sup
+
+```{r GObp Sendai.MediaVsSendai.Sup }
+
+make_nice_table(GObpResults, "Sendai.MediaVsSendai.Sup")
+```
+
+### HIV.Media Vs HIV.Exo
+
+```{r HIV.MediaVsHIV.Exos}
+make_nice_table(GObpResults, "HIV.MediaVsHIV.Exos")
+```
+
+
+### HIV.Media Vs HIV.Lipo
+
+```{r GObp HIV.MediaVsHIV.Lipo}
+
+make_nice_table(GObpResults, "HIV.MediaVsHIV.Lipo")
+```
+
+
+### HIV.Media Vs HIV.Sup
+
+```{r GObp HIV.MediaVsHIV.Sup }
+
+make_nice_table(GObpResults, "HIV.MediaVsHIV.Sup")
+```
